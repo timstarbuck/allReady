@@ -26,6 +26,9 @@ using AllReady.Security.Middleware;
 using Newtonsoft.Json.Serialization;
 using Geocoding;
 using Geocoding.Google;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc.Authorization;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 
 namespace AllReady
 {
@@ -43,12 +46,16 @@ namespace AllReady
 
             if (env.IsDevelopment())
             {
-            // This reads the configuration keys from the secret store.
-            // For more details on using the user secret store see http://go.microsoft.com/fwlink/?LinkID=532709
-            builder.AddUserSecrets();
+                // This reads the configuration keys from the secret store.
+                // For more details on using the user secret store see http://go.microsoft.com/fwlink/?LinkID=532709
+                builder.AddUserSecrets();
 
-            // This will push telemetry data through Application Insights pipeline faster, allowing you to view results immediately.
-            builder.AddApplicationInsightsSettings(developerMode: true);
+                // This will push telemetry data through Application Insights pipeline faster, allowing you to view results immediately.
+                builder.AddApplicationInsightsSettings(developerMode: true);
+            } else if(env.IsStaging() || env.IsProduction())
+            {
+                // This will push telemetry data through Application Insights pipeline faster, allowing you to view results immediately.
+                builder.AddApplicationInsightsSettings(developerMode: false);
             }
 
             Configuration = builder.Build();
@@ -61,29 +68,30 @@ namespace AllReady
         // This method gets called by the runtime. Use this method to add services to the container.
         public IServiceProvider ConfigureServices(IServiceCollection services)
         {
+            //Add CORS support.
+            // Must be first to avoid OPTIONS issues when calling from Angular/Browser
+            var corsBuilder = new CorsPolicyBuilder();
+            corsBuilder.AllowAnyHeader();
+            corsBuilder.AllowAnyMethod();
+            corsBuilder.AllowAnyOrigin();
+            corsBuilder.AllowCredentials();
+            services.AddCors(options =>
+            {
+                options.AddPolicy("allReady", corsBuilder.Build());
+            });
+
             // Add Application Insights data collection services to the services container.
             services.AddApplicationInsightsTelemetry(Configuration);
 
             // Add Entity Framework services to the services container.
             var ef = services.AddDbContext<AllReadyContext>(options => options.UseSqlServer(Configuration["Data:DefaultConnection:ConnectionString"]));
 
-        services.Configure<AzureStorageSettings>(Configuration.GetSection("Data:Storage"));
-        services.Configure<DatabaseSettings>(Configuration.GetSection("Data:DefaultConnection"));
-        services.Configure<EmailSettings>(Configuration.GetSection("Email"));
-        services.Configure<SampleDataSettings>(Configuration.GetSection("SampleData"));
-        services.Configure<GeneralSettings>(Configuration.GetSection("General"));
-        services.Configure<TwitterAuthenticationSettings>(Configuration.GetSection("Authentication:Twitter"));
-
-        // Add CORS support
-        services.AddCors(options =>
-        {
-            options.AddPolicy("allReady", builder =>  builder
-                .AllowAnyOrigin()
-                .AllowAnyHeader()
-                .AllowAnyMethod()
-                .AllowCredentials()
-            );
-        });
+            services.Configure<AzureStorageSettings>(Configuration.GetSection("Data:Storage"));
+            services.Configure<DatabaseSettings>(Configuration.GetSection("Data:DefaultConnection"));
+            services.Configure<EmailSettings>(Configuration.GetSection("Email"));
+            services.Configure<SampleDataSettings>(Configuration.GetSection("SampleData"));
+            services.Configure<GeneralSettings>(Configuration.GetSection("General"));
+            services.Configure<TwitterAuthenticationSettings>(Configuration.GetSection("Authentication:Twitter"));
 
             // Add Identity services to the services container.
             services.AddIdentity<ApplicationUser, IdentityRole>(options =>
@@ -105,6 +113,7 @@ namespace AllReady
             });
 
             // Add MVC services to the services container.
+            // config add to get passed Angular failing on Options request when logging in.
             services.AddMvc().AddJsonOptions(options =>
                 options.SerializerSettings.ContractResolver = new DefaultContractResolver());
 
@@ -118,34 +127,36 @@ namespace AllReady
             return container.Resolve<IServiceProvider>();
         }
 
-    private IContainer CreateIoCContainer(IServiceCollection services)
-    {
-        // todo: move these to a proper autofac module
-        // Register application services.
-        services.AddSingleton((x) => Configuration);
-        services.AddTransient<IEmailSender, AuthMessageSender>();
-        services.AddTransient<ISmsSender, AuthMessageSender>();
-        services.AddTransient<IAllReadyDataAccess, AllReadyDataAccessEF7>();
-        services.AddTransient<IDetermineIfATaskIsEditable, DetermineIfATaskIsEditable>();
-        services.AddTransient<IValidateEventDetailModels, EventEditModelValidator>();
-        services.AddTransient<ITaskSummaryModelValidator, TaskSummaryModelValidator>();
-        services.AddTransient<IItineraryEditModelValidator, ItineraryEditModelValidator>();
-        services.AddTransient<IOrganizationEditModelValidator, OrganizationEditModelValidator>();
-        services.AddSingleton<IImageService, ImageService>();
-        //services.AddSingleton<GeoService>();
-        services.AddTransient<SampleDataGenerator>();
+        private IContainer CreateIoCContainer(IServiceCollection services)
+        {
+            // todo: move these to a proper autofac module
+            // Register application services.
+            services.AddSingleton((x) => Configuration);
+            services.AddTransient<IEmailSender, AuthMessageSender>();
+            services.AddTransient<ISmsSender, AuthMessageSender>();
+            services.AddTransient<IAllReadyDataAccess, AllReadyDataAccessEF7>();
+            services.AddTransient<IDetermineIfATaskIsEditable, DetermineIfATaskIsEditable>();
+            services.AddTransient<IValidateEventDetailModels, EventEditModelValidator>();
+            services.AddTransient<ITaskEditViewModelValidator, TaskEditViewModelValidator>();
+            services.AddTransient<IItineraryEditModelValidator, ItineraryEditModelValidator>();
+            services.AddTransient<IOrganizationEditModelValidator, OrganizationEditModelValidator>();
+            services.AddTransient<ITaskEditViewModelValidator, TaskEditViewModelValidator>();
+            services.AddTransient<IRedirectAccountControllerRequests, RedirectAccountControllerRequests>();
+            services.AddSingleton<IImageService, ImageService>();
+            //services.AddSingleton<GeoService>();
+            services.AddTransient<SampleDataGenerator>();
 
-        if (Configuration["Data:Storage:EnableAzureQueueService"] == "true")
-        {
-            // This setting is false by default. To enable queue processing you will 
-            // need to override the setting in your user secrets or env vars.
-            services.AddTransient<IQueueStorageService, QueueStorageService>();
-        }
-        else
-        {
-            // this writer service will just write to the default logger
-            services.AddTransient<IQueueStorageService, FakeQueueWriterService>();
-        }
+            if (Configuration["Data:Storage:EnableAzureQueueService"] == "true")
+            {
+                // This setting is false by default. To enable queue processing you will 
+                // need to override the setting in your user secrets or env vars.
+                services.AddTransient<IQueueStorageService, QueueStorageService>();
+            }
+            else
+            {
+                // this writer service will just write to the default logger
+                services.AddTransient<IQueueStorageService, FakeQueueWriterService>();
+            }
 
             var containerBuilder = new ContainerBuilder();
             containerBuilder.RegisterSource(new ContravariantRegistrationSource());
@@ -166,9 +177,12 @@ namespace AllReady
         }
 
         // Configure is called after ConfigureServices is called.
-        public async void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory, SampleDataGenerator sampleData, AllReadyContext context, 
+        public async void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory, SampleDataGenerator sampleData, AllReadyContext context,
             IConfiguration configuration)
         {
+            // Put first to avoid issues with OPTIONS when calling from Angular/Browser.  
+            app.UseCors("allReady");
+
             // todo: in RC update we can read from a logging.json config file
             loggerFactory.AddConsole((category, level) =>
             {
@@ -191,9 +205,6 @@ namespace AllReady
                     return true;
                 });
             }
-
-            // CORS support
-            app.UseCors("allReady");
 
             // Configure the HTTP request pipeline.
             var usCultureInfo = new CultureInfo("en-US");
@@ -267,7 +278,8 @@ namespace AllReady
 
                 app.UseMicrosoftAccountAuthentication(options);
             }
-
+            //TODO: mgmccarthy: working on getting email from Twitter
+            //http://www.bigbrainintelligence.com/Post/get-users-email-address-from-twitter-oauth-ap
             if (Configuration["Authentication:Twitter:ConsumerKey"] != null)
             {
                 var options = new TwitterOptions

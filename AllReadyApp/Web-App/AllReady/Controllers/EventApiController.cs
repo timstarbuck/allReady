@@ -5,11 +5,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
-using System.Security.Claims;
 using System.Threading.Tasks;
 using AllReady.Extensions;
 using AllReady.Features.Event;
+using AllReady.Features.Events;
 using AllReady.ViewModels.Event;
 using AllReady.ViewModels.Shared;
 using MediatR;
@@ -48,11 +47,23 @@ namespace AllReady.Controllers
             {
                 return new EventViewModel(campaignEvent);
             }
-            
+
 
             // BUG Change this to IActionResult and use NotFound instead of null
             NotFound();
             return null;
+        }
+        //orginial code
+        [HttpGet("{start}/{end}")]
+        [Produces("application/json", Type = typeof(EventViewModel))]
+        public ActionResult GetEventsByDateRange(DateTimeOffset start, DateTimeOffset end)
+        {
+            var events = _mediator.Send(new EventByDateRangeQuery { EndDate = end, StartDate = start });
+            if (events == null)
+            {
+                return NoContent();
+            }
+            return Json(events);
         }
 
         [Route("search")]
@@ -71,12 +82,12 @@ namespace AllReady.Controllers
         {
             var model = new List<EventViewModel>();
 
-            var campaignEvents = _mediator.Send(new EventsByGeographyQuery { Latitude = latitude, Longitude = longitude, Miles = miles});
+            var campaignEvents = _mediator.Send(new EventsByGeographyQuery { Latitude = latitude, Longitude = longitude, Miles = miles });
             campaignEvents.ForEach(campaignEvent => model.Add(new EventViewModel(campaignEvent)));
 
             return model;
         }
-        
+
         [HttpGet("{id}/qrcode")]
         public ActionResult GetQrCode(int id)
         {
@@ -106,12 +117,12 @@ namespace AllReady.Controllers
             {
                 return NotFound();
             }
-            
+
             return View("NoUserCheckin", campaignEvent);
         }
 
         [HttpPut("{id}/checkin")]
-        [Authorize] 
+        [Authorize]
         public async Task<ActionResult> PutCheckin(int id)
         {
             var campaignEvent = GetEventBy(id);
@@ -119,16 +130,16 @@ namespace AllReady.Controllers
             {
                 return NotFound();
             }
-            
+
             var userSignup = campaignEvent.UsersSignedUp.FirstOrDefault(u => u.User.Id == _userManager.GetUserId(User));
             if (userSignup != null && userSignup.CheckinDateTime == null)
             {
                 userSignup.CheckinDateTime = DateTimeUtcNow.Invoke();
                 await _mediator.SendAsync(new AddEventSignupCommandAsync { EventSignup = userSignup });
-                return Json(new { Event = new { campaignEvent.Name, campaignEvent.Description }});
+                return Json(new { Event = new { campaignEvent.Name, campaignEvent.Description } });
             }
 
-            return Json(new { NeedsSignup = true, Event = new { campaignEvent.Name, campaignEvent.Description }});
+            return Json(new { NeedsSignup = true, Event = new { campaignEvent.Name, campaignEvent.Description } });
         }
 
         [ValidateAntiForgeryToken]
@@ -140,7 +151,7 @@ namespace AllReady.Controllers
             {
                 return BadRequest();
             }
-            
+
             if (!ModelState.IsValid)
             {
                 // this condition should never be hit because client side validation is being performed
@@ -150,7 +161,7 @@ namespace AllReady.Controllers
 
             await _mediator.SendAsync(new EventSignupCommand { EventSignup = signupModel });
 
-            return new {Status = "success"};
+            return new { Status = "success" };
         }
 
         [HttpDelete("{id}/signup")]
@@ -163,7 +174,7 @@ namespace AllReady.Controllers
                 return NotFound();
             }
 
-            await _mediator.SendAsync(new UnregisterEvent { EventSignupId = eventSignup.Id, UserId = eventSignup.User.Id});
+            await _mediator.SendAsync(new UnregisterEvent { EventSignupId = eventSignup.Id, UserId = eventSignup.User.Id });
 
             return Ok();
         }
